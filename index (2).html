@@ -1,0 +1,1064 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Hệ Mặt Trời 3D — Solar System Simulator</title>
+<style>
+/* =====================================================================
+   THIẾT LẬP CHUNG / DESIGN TOKENS
+   ===================================================================== */
+:root{
+  --bg-void:#03040a;
+  --panel-bg: rgba(12,15,26,0.55);
+  --panel-bg-strong: rgba(10,13,22,0.72);
+  --panel-border: rgba(255,255,255,0.09);
+  --accent: #6ea8ff;
+  --accent-warm:#ffb454;
+  --accent-soft: rgba(110,168,255,0.35);
+  --text-main:#e9edf7;
+  --text-dim:#8a92ac;
+  --text-faint:#5b6280;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Consolas", "SFMono-Regular", "Cascadia Mono", Menlo, monospace;
+}
+
+*{ box-sizing:border-box; -webkit-tap-highlight-color: transparent; }
+
+html,body{
+  margin:0; padding:0; width:100%; height:100%;
+  background: var(--bg-void);
+  overflow:hidden;
+  font-family: var(--font-ui);
+  color: var(--text-main);
+  user-select:none;
+}
+
+/* =====================================================================
+   LỚP NỀN VŨ TRỤ: sao, tinh vân, bụi không gian
+   ===================================================================== */
+#layer-stars, #layer-dust{
+  position:fixed; inset:0; width:100%; height:100%;
+  display:block; pointer-events:none;
+}
+#layer-stars{ z-index:0; background:#03040a; }
+#layer-dust{ z-index:2; opacity:0.55; mix-blend-mode:screen; }
+
+#layer-nebula{
+  position:fixed; inset:0; z-index:1; pointer-events:none;
+  overflow:hidden; filter: blur(2px);
+}
+.nebula-blob{
+  position:absolute; border-radius:50%;
+  opacity:0.16; filter: blur(40px);
+  will-change: transform;
+}
+.nebula-blob.n1{
+  width:70vw; height:70vw; left:-15vw; top:-20vh;
+  background: radial-gradient(circle, #4d2fb0 0%, transparent 70%);
+  animation: driftA 90s ease-in-out infinite alternate;
+}
+.nebula-blob.n2{
+  width:60vw; height:60vw; right:-20vw; bottom:-25vh;
+  background: radial-gradient(circle, #0f6b8f 0%, transparent 70%);
+  animation: driftB 120s ease-in-out infinite alternate;
+}
+.nebula-blob.n3{
+  width:45vw; height:45vw; left:35vw; top:40vh;
+  background: radial-gradient(circle, #7a1f4f 0%, transparent 70%);
+  animation: driftA 75s ease-in-out infinite alternate-reverse;
+}
+@keyframes driftA{ from{ transform: translate(0,0) scale(1);} to{ transform: translate(4vw,3vh) scale(1.08);} }
+@keyframes driftB{ from{ transform: translate(0,0) scale(1);} to{ transform: translate(-3vw,-4vh) scale(1.05);} }
+
+body.effects-off #layer-nebula,
+body.effects-off #layer-dust{ display:none; }
+
+/* =====================================================================
+   SÂN KHẤU 3D (STAGE / CAMERA RIG)
+   ===================================================================== */
+#stage{
+  position:fixed; inset:0; z-index:3;
+  perspective: 1900px;
+  perspective-origin: 50% 50%;
+  overflow:hidden;
+  cursor: grab;
+}
+#stage.grabbing{ cursor: grabbing; }
+
+#camera-rig{
+  position:absolute; left:50%; top:50%;
+  width:0; height:0;
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+#solar-system{
+  position:absolute; left:0; top:0;
+  transform-style: preserve-3d;
+}
+
+/* Quỹ đạo: vòng tròn phẳng nằm trong mặt phẳng XZ */
+.orbit-ring{
+  position:absolute; left:0; top:0;
+  border:1px solid rgba(140,170,255,0.16);
+  border-radius:50%;
+  transform-style: preserve-3d;
+  box-shadow: 0 0 12px rgba(110,168,255,0.05);
+  pointer-events:none;
+}
+body.hide-orbits .orbit-ring{ display:none; }
+
+/* Trụ xoay quanh Mặt Trời (pivot) — chỉ xoay quanh trục Y */
+.orbit-pivot{
+  position:absolute; left:0; top:0;
+  width:0; height:0;
+  transform-style: preserve-3d;
+}
+.planet-holder{
+  position:absolute; left:0; top:0;
+  transform-style: preserve-3d;
+}
+body.fast-motion .planet-holder{ filter: blur(0.5px); }
+
+/* =====================================================================
+   MẶT TRỜI
+   ===================================================================== */
+#sun-wrap{
+  position:absolute; left:0; top:0;
+  transform-style: preserve-3d;
+}
+#sun{
+  position:absolute; border-radius:50%;
+  background: radial-gradient(circle at 38% 35%, #fff6d8 0%, #ffd873 25%, #ffb340 48%, #ff7d1f 72%, #c8480c 100%);
+  box-shadow:
+    0 0 40px 10px rgba(255,190,90,0.9),
+    0 0 90px 30px rgba(255,150,50,0.55),
+    0 0 160px 70px rgba(255,120,30,0.35),
+    0 0 260px 120px rgba(255,90,20,0.18);
+  animation: sunPulse 6s ease-in-out infinite;
+}
+@keyframes sunPulse{
+  0%,100%{ filter:brightness(1) saturate(1); }
+  50%{ filter:brightness(1.08) saturate(1.12); }
+}
+#sun::before{ /* Lớp corona 1 */
+  content:""; position:absolute; inset:-35%;
+  border-radius:50%;
+  background: radial-gradient(circle, rgba(255,210,120,0.35) 0%, rgba(255,150,60,0.12) 45%, transparent 70%);
+  animation: coronaSpin 40s linear infinite;
+}
+#sun::after{ /* Lớp corona 2, ngược chiều */
+  content:""; position:absolute; inset:-60%;
+  border-radius:50%;
+  background: repeating-conic-gradient(from 0deg, rgba(255,200,110,0.10) 0deg 8deg, transparent 8deg 16deg);
+  animation: coronaSpin 70s linear infinite reverse;
+  opacity:0.6;
+}
+@keyframes coronaSpin{ from{ transform:rotate(0deg);} to{ transform:rotate(360deg);} }
+body.no-glow #sun{ box-shadow:none; }
+body.no-glow #sun::before, body.no-glow #sun::after{ display:none; }
+
+/* =====================================================================
+   HÀNH TINH — KHUNG CHUNG
+   ===================================================================== */
+.planet{
+  position:absolute; border-radius:50%;
+  transform-style: preserve-3d;
+  background: radial-gradient(circle at 32% 28%, var(--c1) 0%, var(--c2) 55%, var(--c3) 100%);
+  box-shadow:
+    inset -30% -30% 40% rgba(0,0,0,0.65),
+    inset 12% 12% 25% rgba(255,255,255,0.14),
+    0 0 18px 2px var(--glow, rgba(255,255,255,0.08));
+  cursor: pointer;
+  transition: box-shadow 0.2s ease;
+}
+.planet:hover{
+  box-shadow:
+    inset -30% -30% 40% rgba(0,0,0,0.6),
+    inset 12% 12% 25% rgba(255,255,255,0.2),
+    0 0 26px 6px var(--glow, rgba(255,255,255,0.25));
+}
+body.no-glow .planet{ box-shadow: inset -30% -30% 40% rgba(0,0,0,0.65), inset 12% 12% 25% rgba(255,255,255,0.14); }
+
+/* lớp bề mặt xoay (texture) */
+.planet::before{
+  content:""; position:absolute; inset:0; border-radius:50%;
+  transform: rotate(var(--spin, 0deg));
+  background: var(--texture, none);
+  mix-blend-mode: overlay;
+  opacity:0.85;
+}
+/* lớp mây / điểm sáng phụ, xoay tốc độ khác để tạo chiều sâu */
+.planet::after{
+  content:""; position:absolute; inset:0; border-radius:50%;
+  transform: rotate(var(--cloud-spin, 0deg));
+  background: var(--clouds, none);
+  opacity: var(--clouds-opacity, 0);
+}
+
+/* --- Sắc tố riêng từng hành tinh --- */
+.planet.mercury{
+  --c1:#d8d5cf; --c2:#9a968d; --c3:#4d4a44; --glow: rgba(190,185,170,0.35);
+  --texture: radial-gradient(circle at 20% 30%, rgba(0,0,0,0.35) 0 6%, transparent 7%),
+             radial-gradient(circle at 60% 65%, rgba(0,0,0,0.3) 0 8%, transparent 9%),
+             radial-gradient(circle at 75% 20%, rgba(0,0,0,0.25) 0 5%, transparent 6%),
+             radial-gradient(circle at 40% 80%, rgba(0,0,0,0.3) 0 4%, transparent 5%),
+             radial-gradient(circle at 85% 55%, rgba(0,0,0,0.22) 0 5%, transparent 6%);
+}
+.planet.venus{
+  --c1:#ffe9b0; --c2:#e2a94a; --c3:#8a5a1c; --glow: rgba(255,210,120,0.4);
+  --texture: repeating-conic-gradient(from 10deg at 50% 50%, rgba(255,255,255,0.10) 0deg 20deg, rgba(120,70,10,0.12) 20deg 40deg);
+}
+.planet.earth{
+  --c1:#8fd0ff; --c2:#1f6fb8; --c3:#0a2b4d; --glow: rgba(110,170,255,0.5);
+  --texture: radial-gradient(circle at 25% 30%, rgba(70,140,60,0.9) 0 10%, transparent 11%),
+             radial-gradient(circle at 60% 25%, rgba(70,140,60,0.85) 0 12%, transparent 13%),
+             radial-gradient(circle at 40% 65%, rgba(60,120,55,0.85) 0 14%, transparent 15%),
+             radial-gradient(circle at 75% 70%, rgba(65,130,60,0.8) 0 9%, transparent 10%),
+             radial-gradient(circle at 15% 75%, rgba(60,120,55,0.8) 0 8%, transparent 9%);
+  --clouds: radial-gradient(circle at 30% 20%, rgba(255,255,255,0.9) 0 8%, transparent 9%),
+            radial-gradient(circle at 70% 40%, rgba(255,255,255,0.85) 0 10%, transparent 11%),
+            radial-gradient(circle at 45% 75%, rgba(255,255,255,0.8) 0 9%, transparent 10%),
+            radial-gradient(circle at 85% 80%, rgba(255,255,255,0.75) 0 6%, transparent 7%);
+  --clouds-opacity: 0.55;
+}
+.planet.moon{
+  --c1:#e8e6e1; --c2:#aba79f; --c3:#5c584f; --glow: rgba(220,220,210,0.3);
+  --texture: radial-gradient(circle at 30% 30%, rgba(0,0,0,0.25) 0 10%, transparent 11%),
+             radial-gradient(circle at 65% 60%, rgba(0,0,0,0.22) 0 12%, transparent 13%),
+             radial-gradient(circle at 75% 25%, rgba(0,0,0,0.2) 0 7%, transparent 8%);
+}
+.planet.mars{
+  --c1:#ffb27a; --c2:#c1502a; --c3:#5e1f0e; --glow: rgba(255,110,60,0.45);
+  --texture: radial-gradient(circle at 30% 70%, rgba(0,0,0,0.25) 0 14%, transparent 15%),
+             radial-gradient(circle at 65% 30%, rgba(120,50,20,0.35) 0 20%, transparent 21%),
+             radial-gradient(ellipse at 50% 90%, rgba(255,255,255,0.35) 0 10%, transparent 12%);
+}
+.planet.jupiter{
+  --c1:#f3d9b5; --c2:#c99a63; --c3:#7a4f28; --glow: rgba(240,190,120,0.45);
+  --texture: repeating-linear-gradient(0deg, rgba(120,80,40,0.35) 0 6%, rgba(230,200,160,0.25) 6% 12%),
+             radial-gradient(ellipse 18% 10% at 68% 60%, rgba(180,60,40,0.55) 0 100%, transparent 100%);
+}
+.planet.saturn{
+  --c1:#f7ecc9; --c2:#d8bf85; --c3:#8c7238; --glow: rgba(240,220,160,0.4);
+  --texture: repeating-linear-gradient(0deg, rgba(140,110,60,0.25) 0 8%, rgba(250,240,210,0.2) 8% 16%);
+}
+.planet.uranus{
+  --c1:#cdf3f0; --c2:#7fd0ca; --c3:#2c6b68; --glow: rgba(140,230,220,0.4);
+  --texture: repeating-linear-gradient(90deg, rgba(255,255,255,0.08) 0 10%, rgba(0,60,55,0.1) 10% 20%);
+}
+.planet.neptune{
+  --c1:#7fa8ff; --c2:#2a4fc7; --c3:#0f1f5c; --glow: rgba(90,130,255,0.5);
+  --texture: radial-gradient(ellipse 22% 14% at 40% 55%, rgba(255,255,255,0.4) 0 100%, transparent 100%),
+             repeating-linear-gradient(100deg, rgba(255,255,255,0.05) 0 10%, transparent 10% 20%);
+}
+
+/* Vành đai Sao Thổ */
+.saturn-rings{
+  position:absolute; left:50%; top:50%;
+  transform: translate(-50%,-50%) rotateX(78deg);
+  border-radius:50%;
+  pointer-events:none;
+  background:
+    repeating-radial-gradient(circle,
+      rgba(230,210,170,0.55) 0px, rgba(230,210,170,0.55) 3px,
+      rgba(120,100,70,0.15) 3px, rgba(120,100,70,0.15) 6px,
+      rgba(230,210,170,0.4) 6px, rgba(230,210,170,0.4) 9px,
+      transparent 9px, transparent 12px);
+  -webkit-mask: radial-gradient(circle, transparent 55%, #000 58%, #000 96%, transparent 98%);
+          mask: radial-gradient(circle, transparent 55%, #000 58%, #000 96%, transparent 98%);
+  filter: drop-shadow(0 0 6px rgba(220,200,150,0.25));
+}
+body.no-glow .saturn-rings{ filter:none; }
+
+/* Nhãn tên hành tinh */
+.planet-label{
+  position:absolute; left:50%; top:100%;
+  transform: translate(-50%, 6px);
+  font-size:11px; letter-spacing:0.06em; white-space:nowrap;
+  color: var(--text-dim);
+  text-shadow: 0 0 6px rgba(0,0,0,0.9), 0 0 3px rgba(0,0,0,0.9);
+  pointer-events:none;
+  font-family: var(--font-ui);
+}
+body.hide-labels .planet-label{ display:none; }
+
+/* =====================================================================
+   TOOLTIP
+   ===================================================================== */
+#tooltip{
+  position:fixed; z-index:50; pointer-events:none;
+  min-width:220px; padding:12px 14px;
+  background: var(--panel-bg-strong);
+  border:1px solid var(--panel-border);
+  border-radius:12px;
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  box-shadow: 0 12px 30px rgba(0,0,0,0.45);
+  opacity:0; transform: translateY(4px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+#tooltip.visible{ opacity:1; transform: translateY(0); }
+#tooltip h3{
+  margin:0 0 8px 0; font-size:14px; letter-spacing:0.02em;
+  color: var(--text-main); display:flex; align-items:center; gap:8px;
+}
+#tooltip .swatch{ width:10px; height:10px; border-radius:50%; display:inline-block; }
+#tooltip .row{
+  display:flex; justify-content:space-between; gap:16px;
+  font-size:11.5px; padding:2px 0; color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+#tooltip .row b{ color: var(--text-main); font-weight:500; }
+
+/* =====================================================================
+   UI: PANEL ĐIỀU KHIỂN (GLASSMORPHISM)
+   ===================================================================== */
+#ui-panel{
+  position:fixed; top:18px; left:18px; z-index:60;
+  width:270px; max-height:calc(100vh - 36px);
+  padding:16px 16px 14px;
+  background: var(--panel-bg);
+  border:1px solid var(--panel-border);
+  border-radius:16px;
+  backdrop-filter: blur(var(--glass-blur, 14px)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 14px)) saturate(150%);
+  box-shadow: 0 20px 50px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06);
+  overflow-y:auto;
+}
+#ui-panel::-webkit-scrollbar{ width:5px; }
+#ui-panel::-webkit-scrollbar-thumb{ background: rgba(255,255,255,0.15); border-radius:4px; }
+
+#ui-panel h1{
+  margin:0 0 2px; font-size:15px; font-weight:600; letter-spacing:0.02em;
+  display:flex; align-items:center; gap:8px;
+}
+#ui-panel h1 .dot{
+  width:8px; height:8px; border-radius:50%; background: var(--accent-warm);
+  box-shadow:0 0 8px var(--accent-warm); flex:none;
+}
+#ui-panel .subtitle{ font-size:10.5px; color: var(--text-faint); margin-bottom:12px; letter-spacing:0.04em; text-transform:uppercase; }
+
+.stat-row{
+  display:flex; justify-content:space-between; align-items:baseline;
+  font-family: var(--font-mono); font-size:12px; padding:3px 0;
+  color: var(--text-dim);
+}
+.stat-row b{ color: var(--accent); font-weight:600; }
+
+.divider{ height:1px; background: rgba(255,255,255,0.08); margin:10px 0; }
+
+.section-label{
+  font-size:10px; text-transform:uppercase; letter-spacing:0.08em;
+  color: var(--text-faint); margin: 6px 0 8px;
+}
+
+.btn-row{ display:flex; gap:8px; margin-bottom:10px; }
+.btn{
+  flex:1; padding:8px 0; text-align:center; font-size:12px; font-weight:600;
+  color: var(--text-main); background: rgba(255,255,255,0.06);
+  border:1px solid var(--panel-border); border-radius:9px;
+  cursor:pointer; transition: all 0.15s ease; letter-spacing:0.02em;
+  font-family: var(--font-ui);
+}
+.btn:hover{ background: rgba(255,255,255,0.12); border-color: var(--accent-soft); }
+.btn:active{ transform: scale(0.96); }
+.btn.primary{ background: linear-gradient(135deg, rgba(110,168,255,0.35), rgba(110,168,255,0.15)); border-color: rgba(110,168,255,0.4); }
+
+.slider-block{ margin-bottom:10px; }
+.slider-block label{ display:flex; justify-content:space-between; font-size:11px; color: var(--text-dim); margin-bottom:5px; }
+.slider-block label span{ color: var(--accent-warm); font-family: var(--font-mono); }
+input[type="range"]{
+  -webkit-appearance:none; appearance:none; width:100%; height:4px;
+  background: rgba(255,255,255,0.15); border-radius:3px; outline:none;
+}
+input[type="range"]::-webkit-slider-thumb{
+  -webkit-appearance:none; width:14px; height:14px; border-radius:50%;
+  background: var(--accent); box-shadow:0 0 8px var(--accent-soft); cursor:pointer;
+  border:2px solid rgba(255,255,255,0.8);
+}
+input[type="range"]::-moz-range-thumb{
+  width:14px; height:14px; border-radius:50%; background: var(--accent);
+  border:2px solid rgba(255,255,255,0.8); cursor:pointer;
+}
+
+.check-row{
+  display:flex; align-items:center; gap:8px; padding:4px 0;
+  font-size:12px; color: var(--text-dim); cursor:pointer;
+}
+.check-row input{ accent-color: var(--accent); width:14px; height:14px; cursor:pointer; }
+.check-row:hover{ color: var(--text-main); }
+
+#fps-badge{
+  position:fixed; top:18px; right:18px; z-index:60;
+  padding:8px 14px; font-family: var(--font-mono); font-size:12px;
+  background: var(--panel-bg); border:1px solid var(--panel-border); border-radius:10px;
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  color: var(--text-dim); display:flex; gap:14px; align-items:center;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+}
+#fps-badge b{ color: var(--accent); }
+#fps-badge .fps-good{ color:#7ee787; }
+#fps-badge .fps-warn{ color:#ffb454; }
+
+#hint{
+  position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
+  z-index:60; font-size:11px; color: var(--text-faint);
+  background: var(--panel-bg); border:1px solid var(--panel-border);
+  padding:7px 14px; border-radius:20px;
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  white-space:nowrap; pointer-events:none;
+  opacity:0.85;
+}
+
+/* =====================================================================
+   RESPONSIVE
+   ===================================================================== */
+@media (max-width: 900px){
+  #ui-panel{ width:230px; padding:12px; }
+  #fps-badge{ font-size:11px; padding:6px 10px; gap:10px; }
+  #hint{ display:none; }
+}
+@media (max-width: 640px){
+  #ui-panel{
+    top:auto; bottom:8px; left:8px; right:8px; width:auto;
+    max-height:46vh; border-radius:14px;
+  }
+  #fps-badge{ top:8px; right:8px; padding:6px 10px; font-size:10px; gap:8px; }
+  #tooltip{ max-width: 70vw; }
+}
+@media (prefers-reduced-motion: reduce){
+  #sun{ animation:none; }
+  #sun::before,#sun::after{ animation:none; }
+  .nebula-blob{ animation:none; }
+}
+</style>
+</head>
+<body>
+
+<!-- ================= NỀN VŨ TRỤ ================= -->
+<canvas id="layer-stars"></canvas>
+<div id="layer-nebula">
+  <div class="nebula-blob n1"></div>
+  <div class="nebula-blob n2"></div>
+  <div class="nebula-blob n3"></div>
+</div>
+<canvas id="layer-dust"></canvas>
+
+<!-- ================= SÂN KHẤU 3D ================= -->
+<div id="stage">
+  <div id="camera-rig">
+    <div id="solar-system"><!-- Mặt Trời + quỹ đạo + hành tinh được JS tạo tại đây --></div>
+  </div>
+</div>
+
+<!-- ================= TOOLTIP ================= -->
+<div id="tooltip"></div>
+
+<!-- ================= FPS BADGE ================= -->
+<div id="fps-badge">
+  <span>FPS <b id="fps-value">60</b></span>
+  <span>SIM <b id="sim-clock">Ngày 0.0</b></span>
+</div>
+
+<!-- ================= PANEL ĐIỀU KHIỂN ================= -->
+<div id="ui-panel">
+  <h1><span class="dot"></span>Solar System 3D</h1>
+  <div class="subtitle">Mô phỏng Hệ Mặt Trời</div>
+
+  <div class="stat-row"><span>Tốc độ mô phỏng</span><b id="speed-readout">1.0×</b></div>
+  <div class="stat-row"><span>Thời gian mô phỏng</span><b id="time-readout">0 ngày</b></div>
+
+  <div class="divider"></div>
+
+  <div class="btn-row">
+    <div class="btn primary" id="btn-play">⏸ Pause</div>
+    <div class="btn" id="btn-reset">⟲ Reset</div>
+  </div>
+
+  <div class="slider-block">
+    <label>Tốc độ thời gian <span id="speed-label">1.0×</span></label>
+    <input type="range" id="speed-slider" min="0" max="200" value="50" step="1">
+  </div>
+  <div class="slider-block">
+    <label>Zoom camera <span id="zoom-label">100%</span></label>
+    <input type="range" id="zoom-slider" min="30" max="300" value="100" step="1">
+  </div>
+
+  <div class="divider"></div>
+  <div class="section-label">Hiển thị</div>
+
+  <label class="check-row"><input type="checkbox" id="chk-orbits" checked> Quỹ đạo</label>
+  <label class="check-row"><input type="checkbox" id="chk-labels" checked> Tên hành tinh</label>
+  <label class="check-row"><input type="checkbox" id="chk-stars" checked> Sao nền</label>
+  <label class="check-row"><input type="checkbox" id="chk-glow" checked> Hiệu ứng glow</label>
+  <label class="check-row"><input type="checkbox" id="chk-effects" checked> Tinh vân / bụi vũ trụ</label>
+
+  <div class="divider"></div>
+  <div class="section-label">Camera</div>
+  <div class="btn-row">
+    <div class="btn" id="btn-cam-reset">Reset góc nhìn</div>
+  </div>
+</div>
+
+<div id="hint">Kéo chuột để xoay · Chuột phải/Shift để pan · Cuộn để zoom</div>
+
+<script>
+(function(){
+"use strict";
+
+/* =====================================================================
+   PHẦN 1 — DỮ LIỆU THIÊN VĂN (dùng cho tooltip + tham số mô phỏng)
+   Kích thước & bán kính quỹ đạo hiển thị được NÉN LẠI (không theo tỉ lệ
+   thật) để toàn bộ hệ hành tinh vừa khung hình và dễ quan sát, nhưng vẫn
+   giữ đúng THỨ TỰ khoảng cách và mối tương quan tốc độ (gần Mặt Trời quay
+   nhanh hơn, xa hơn quay chậm hơn) như thực tế.
+   ===================================================================== */
+  var PLANETS = [
+    {
+      key:"mercury", name:"Sao Thủy (Mercury)",
+      diameterKm:4879, distanceKm:57900000, orbitReal:"88 ngày", spinReal:"58,6 ngày",
+      size:7, orbitRadius:78, orbitSpeed:0.90, spinSpeed:0.05, color:"#c9c6c0"
+    },
+    {
+      key:"venus", name:"Sao Kim (Venus)",
+      diameterKm:12104, distanceKm:108200000, orbitReal:"224,7 ngày", spinReal:"243 ngày (nghịch hành)",
+      size:11, orbitRadius:108, orbitSpeed:0.71, spinSpeed:-0.03, color:"#e2a94a"
+    },
+    {
+      key:"earth", name:"Trái Đất (Earth)",
+      diameterKm:12742, distanceKm:149600000, orbitReal:"365,25 ngày", spinReal:"24 giờ",
+      size:12, orbitRadius:142, orbitSpeed:0.58, spinSpeed:2.1, color:"#3a8ee0",
+      moon:{ name:"Mặt Trăng (Moon)", diameterKm:3474, distanceKm:384400, orbitReal:"27,3 ngày", spinReal:"27,3 ngày (khóa thủy triều)",
+             size:4, orbitRadius:22, orbitSpeed:2.2, spinSpeed:2.2, color:"#c9c6c0" }
+    },
+    {
+      key:"mars", name:"Sao Hỏa (Mars)",
+      diameterKm:6779, distanceKm:227900000, orbitReal:"687 ngày", spinReal:"24,6 giờ",
+      size:8, orbitRadius:178, orbitSpeed:0.47, spinSpeed:2.05, color:"#c1502a"
+    },
+    {
+      key:"jupiter", name:"Sao Mộc (Jupiter)",
+      diameterKm:139820, distanceKm:778500000, orbitReal:"11,86 năm", spinReal:"9,9 giờ",
+      size:30, orbitRadius:250, orbitSpeed:0.27, spinSpeed:4.4, color:"#c99a63"
+    },
+    {
+      key:"saturn", name:"Sao Thổ (Saturn)",
+      diameterKm:116460, distanceKm:1434000000, orbitReal:"29,5 năm", spinReal:"10,7 giờ",
+      size:26, orbitRadius:326, orbitSpeed:0.19, spinSpeed:4.1, color:"#d8bf85", hasRings:true
+    },
+    {
+      key:"uranus", name:"Sao Thiên Vương (Uranus)",
+      diameterKm:50724, distanceKm:2871000000, orbitReal:"84 năm", spinReal:"17,2 giờ",
+      size:18, orbitRadius:392, orbitSpeed:0.14, spinSpeed:3.2, color:"#7fd0ca"
+    },
+    {
+      key:"neptune", name:"Sao Hải Vương (Neptune)",
+      diameterKm:49244, distanceKm:4495000000, orbitReal:"165 năm", spinReal:"16,1 giờ",
+      size:17, orbitRadius:452, orbitSpeed:0.11, spinSpeed:3.3, color:"#2a4fc7"
+    }
+  ];
+
+  function fmtNumber(n){ return n.toLocaleString("vi-VN"); }
+
+  /* =====================================================================
+     PHẦN 2 — NỀN VŨ TRỤ: SAO, TINH VÂN, BỤI KHÔNG GIAN
+     ===================================================================== */
+  var starCanvas = document.getElementById("layer-stars");
+  var starCtx = starCanvas.getContext("2d");
+  var dustCanvas = document.getElementById("layer-dust");
+  var dustCtx = dustCanvas.getContext("2d");
+  var stars = [];
+  var dustParticles = [];
+  var starsEnabled = true;
+
+  function resizeCanvases(){
+    [starCanvas, dustCanvas].forEach(function(c){
+      c.width = window.innerWidth * (window.devicePixelRatio || 1);
+      c.height = window.innerHeight * (window.devicePixelRatio || 1);
+      c.style.width = window.innerWidth + "px";
+      c.style.height = window.innerHeight + "px";
+    });
+  }
+
+  function buildStars(){
+    stars = [];
+    var count = Math.round((window.innerWidth * window.innerHeight) / 900); // hàng nghìn ngôi sao
+    for(var i=0;i<count;i++){
+      stars.push({
+        x: Math.random(), y: Math.random(),
+        r: Math.random()*1.3 + 0.2,
+        baseAlpha: Math.random()*0.6 + 0.25,
+        speed: Math.random()*1.4 + 0.3,
+        phase: Math.random()*Math.PI*2,
+        hue: Math.random() < 0.12 ? (Math.random()<0.5 ? "210,225,255" : "255,225,200") : "255,255,255"
+      });
+    }
+  }
+
+  function buildDust(){
+    dustParticles = [];
+    var count = 140;
+    for(var i=0;i<count;i++){
+      dustParticles.push({
+        x: Math.random(), y: Math.random(),
+        r: Math.random()*1.6 + 0.4,
+        vx: (Math.random()-0.5)*0.00006,
+        vy: (Math.random()-0.5)*0.00006,
+        alpha: Math.random()*0.3 + 0.05
+      });
+    }
+  }
+
+  function drawStars(time){
+    var dpr = window.devicePixelRatio || 1;
+    starCtx.setTransform(dpr,0,0,dpr,0,0);
+    starCtx.clearRect(0,0,starCanvas.width,starCanvas.height);
+    if(!starsEnabled) return;
+    var w = window.innerWidth, h = window.innerHeight;
+    for(var i=0;i<stars.length;i++){
+      var s = stars[i];
+      var tw = 0.5 + 0.5*Math.sin(time*0.001*s.speed + s.phase); // nhấp nháy
+      var a = s.baseAlpha * (0.55 + 0.45*tw);
+      starCtx.beginPath();
+      starCtx.fillStyle = "rgba(" + s.hue + "," + a.toFixed(3) + ")";
+      starCtx.arc(s.x*w, s.y*h, s.r, 0, Math.PI*2);
+      starCtx.fill();
+    }
+  }
+
+  function drawDust(time, parallaxX, parallaxY){
+    var dpr = window.devicePixelRatio || 1;
+    dustCtx.setTransform(dpr,0,0,dpr,0,0);
+    dustCtx.clearRect(0,0,dustCanvas.width,dustCanvas.height);
+    var w = window.innerWidth, h = window.innerHeight;
+    for(var i=0;i<dustParticles.length;i++){
+      var p = dustParticles[i];
+      p.x += p.vx; p.y += p.vy;
+      if(p.x<0)p.x=1; if(p.x>1)p.x=0; if(p.y<0)p.y=1; if(p.y>1)p.y=0;
+      var px = p.x*w + parallaxX, py = p.y*h + parallaxY;
+      dustCtx.beginPath();
+      dustCtx.fillStyle = "rgba(200,210,255," + p.alpha + ")";
+      dustCtx.arc(px, py, p.r, 0, Math.PI*2);
+      dustCtx.fill();
+    }
+  }
+
+  /* =====================================================================
+     PHẦN 3 — DỰNG HỆ MẶT TRỜI TRONG DOM (Sun, orbit rings, planets, moon)
+     ===================================================================== */
+  var solarSystem = document.getElementById("solar-system");
+
+  // --- Mặt Trời ---
+  var sunWrap = document.createElement("div");
+  sunWrap.id = "sun-wrap";
+  var SUN_SIZE = 64;
+  var sun = document.createElement("div");
+  sun.id = "sun";
+  sun.style.width = SUN_SIZE + "px";
+  sun.style.height = SUN_SIZE + "px";
+  sun.style.left = (-SUN_SIZE/2) + "px";
+  sun.style.top = (-SUN_SIZE/2) + "px";
+  sunWrap.appendChild(sun);
+  solarSystem.appendChild(sunWrap);
+
+  var planetRefs = []; // lưu tham chiếu DOM + dữ liệu cho vòng lặp hoạt ảnh
+
+  function makeOrbitRing(radius){
+    var ring = document.createElement("div");
+    ring.className = "orbit-ring";
+    ring.style.width = (radius*2) + "px";
+    ring.style.height = (radius*2) + "px";
+    ring.style.left = (-radius) + "px";
+    ring.style.top = (-radius) + "px";
+    ring.style.transform = "rotateX(90deg)";
+    return ring;
+  }
+
+  function makePlanetEl(data){
+    var el = document.createElement("div");
+    el.className = "planet " + data.key;
+    el.style.width = (data.size*2) + "px";
+    el.style.height = (data.size*2) + "px";
+    el.style.left = (-data.size) + "px";
+    el.style.top = (-data.size) + "px";
+    return el;
+  }
+
+  PLANETS.forEach(function(data){
+    // Vòng quỹ đạo quanh Mặt Trời
+    solarSystem.appendChild(makeOrbitRing(data.orbitRadius));
+
+    // Trụ xoay quanh Mặt Trời
+    var pivot = document.createElement("div");
+    pivot.className = "orbit-pivot";
+
+    var holder = document.createElement("div");
+    holder.className = "planet-holder";
+    holder.style.transform = "translate3d(" + data.orbitRadius + "px,0,0)";
+
+    var planetEl = makePlanetEl(data);
+
+    // Vành đai Sao Thổ
+    if(data.hasRings){
+      var rings = document.createElement("div");
+      rings.className = "saturn-rings";
+      var ringSize = data.size*3.2;
+      rings.style.width = ringSize + "px";
+      rings.style.height = ringSize + "px";
+      planetEl.appendChild(rings);
+    }
+
+    // Nhãn tên
+    var label = document.createElement("div");
+    label.className = "planet-label";
+    label.textContent = data.name.split(" (")[0];
+    planetEl.appendChild(label);
+
+    holder.appendChild(planetEl);
+
+    var moonPivot = null, moonEl = null, moonData = null;
+    if(data.moon){
+      moonData = data.moon;
+      // Vòng quỹ đạo Mặt Trăng quanh Trái Đất
+      var moonRing = document.createElement("div");
+      moonRing.className = "orbit-ring";
+      moonRing.style.width = (moonData.orbitRadius*2) + "px";
+      moonRing.style.height = (moonData.orbitRadius*2) + "px";
+      moonRing.style.left = (-moonData.orbitRadius) + "px";
+      moonRing.style.top = (-moonData.orbitRadius) + "px";
+      moonRing.style.transform = "rotateX(90deg)";
+      moonRing.style.borderColor = "rgba(255,255,255,0.1)";
+      planetEl.appendChild(moonRing);
+
+      moonPivot = document.createElement("div");
+      moonPivot.className = "orbit-pivot";
+      var moonHolder = document.createElement("div");
+      moonHolder.className = "planet-holder";
+      moonHolder.style.transform = "translate3d(" + moonData.orbitRadius + "px,0,0)";
+      moonEl = makePlanetEl({key:"moon", size:moonData.size});
+      var moonLabel = document.createElement("div");
+      moonLabel.className = "planet-label";
+      moonLabel.textContent = "Mặt Trăng";
+      moonEl.appendChild(moonLabel);
+      moonHolder.appendChild(moonEl);
+      moonPivot.appendChild(moonHolder);
+      planetEl.appendChild(moonPivot);
+    }
+
+    pivot.appendChild(holder);
+    solarSystem.appendChild(pivot);
+
+    planetRefs.push({
+      data: data, pivot: pivot, el: planetEl,
+      angleOffset: Math.random()*Math.PI*2,
+      moon: data.moon ? { data: data.moon, pivot: moonPivot, el: moonEl, angleOffset: Math.random()*Math.PI*2 } : null
+    });
+  });
+
+  /* =====================================================================
+     PHẦN 4 — TOOLTIP THÔNG TIN HÀNH TINH
+     ===================================================================== */
+  var tooltip = document.getElementById("tooltip");
+
+  function showTooltip(info){
+    tooltip.innerHTML =
+      '<h3><span class="swatch" style="background:'+info.color+'"></span>'+info.name+'</h3>' +
+      '<div class="row"><span>Đường kính</span><b>'+fmtNumber(info.diameterKm)+' km</b></div>' +
+      '<div class="row"><span>Khoảng cách tới Mặt Trời</span><b>'+fmtNumber(info.distanceKm)+' km</b></div>' +
+      '<div class="row"><span>Chu kỳ quỹ đạo</span><b>'+info.orbitReal+'</b></div>' +
+      '<div class="row"><span>Chu kỳ tự quay</span><b>'+info.spinReal+'</b></div>';
+    tooltip.classList.add("visible");
+  }
+  function hideTooltip(){ tooltip.classList.remove("visible"); }
+  function moveTooltip(e){
+    var x = e.clientX, y = e.clientY;
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var tw = 240, th = 130;
+    if(x + tw + 24 > vw) x = x - tw - 20; else x = x + 20;
+    if(y + th + 24 > vh) y = y - th - 10; else y = y + 16;
+    tooltip.style.left = x + "px";
+    tooltip.style.top = y + "px";
+  }
+
+  planetRefs.forEach(function(ref){
+    ref.el.addEventListener("mouseenter", function(){ showTooltip(ref.data); });
+    ref.el.addEventListener("mouseleave", hideTooltip);
+    ref.el.addEventListener("mousemove", moveTooltip);
+    ref.el.addEventListener("touchstart", function(e){ showTooltip(ref.data); }, {passive:true});
+    if(ref.moon){
+      ref.moon.el.addEventListener("mouseenter", function(e){ e.stopPropagation(); showTooltip(ref.moon.data); });
+      ref.moon.el.addEventListener("mouseleave", function(e){ e.stopPropagation(); hideTooltip(); });
+      ref.moon.el.addEventListener("mousemove", function(e){ e.stopPropagation(); moveTooltip(e); });
+    }
+  });
+
+  /* =====================================================================
+     PHẦN 5 — ĐIỀU KHIỂN CAMERA (kéo xoay / pan / zoom / reset)
+     ===================================================================== */
+  var stage = document.getElementById("stage");
+  var cameraRig = document.getElementById("camera-rig");
+
+  var CAM_DEFAULT = { theta: -0.5, phi: 0.55, zoom: 1.0, panX: 0, panY: 0 };
+  var camTarget = { theta: CAM_DEFAULT.theta, phi: CAM_DEFAULT.phi, zoom: CAM_DEFAULT.zoom, panX: 0, panY: 0 };
+  var camState  = { theta: CAM_DEFAULT.theta, phi: CAM_DEFAULT.phi, zoom: CAM_DEFAULT.zoom, panX: 0, panY: 0 };
+
+  var isDragging = false, isPanning = false;
+  var lastPointer = {x:0,y:0};
+
+  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+
+  stage.addEventListener("mousedown", function(e){
+    isDragging = true;
+    isPanning = (e.button === 2 || e.shiftKey);
+    lastPointer.x = e.clientX; lastPointer.y = e.clientY;
+    stage.classList.add("grabbing");
+  });
+  window.addEventListener("mouseup", function(){ isDragging = false; stage.classList.remove("grabbing"); });
+  window.addEventListener("mousemove", function(e){
+    if(!isDragging) return;
+    var dx = e.clientX - lastPointer.x, dy = e.clientY - lastPointer.y;
+    lastPointer.x = e.clientX; lastPointer.y = e.clientY;
+    if(isPanning){
+      camTarget.panX += dx * 0.9;
+      camTarget.panY += dy * 0.9;
+    } else {
+      camTarget.theta += dx * 0.0045;
+      camTarget.phi = clamp(camTarget.phi - dy * 0.0045, -1.35, 1.35);
+    }
+  });
+  stage.addEventListener("contextmenu", function(e){ e.preventDefault(); });
+
+  stage.addEventListener("wheel", function(e){
+    e.preventDefault();
+    var factor = 1 - clamp(e.deltaY, -100, 100) * 0.0012;
+    camTarget.zoom = clamp(camTarget.zoom * factor, 0.35, 3.2);
+    syncZoomSlider();
+  }, {passive:false});
+
+  // Cảm ứng (tablet)
+  var touchState = { mode:null, lastX:0, lastY:0, lastDist:0 };
+  stage.addEventListener("touchstart", function(e){
+    if(e.touches.length === 1){
+      touchState.mode = "rotate";
+      touchState.lastX = e.touches[0].clientX;
+      touchState.lastY = e.touches[0].clientY;
+    } else if(e.touches.length === 2){
+      touchState.mode = "pinch";
+      var dx = e.touches[0].clientX - e.touches[1].clientX;
+      var dy = e.touches[0].clientY - e.touches[1].clientY;
+      touchState.lastDist = Math.sqrt(dx*dx+dy*dy);
+      touchState.lastX = (e.touches[0].clientX + e.touches[1].clientX)/2;
+      touchState.lastY = (e.touches[0].clientY + e.touches[1].clientY)/2;
+    }
+  }, {passive:true});
+  stage.addEventListener("touchmove", function(e){
+    if(touchState.mode === "rotate" && e.touches.length === 1){
+      var dx = e.touches[0].clientX - touchState.lastX;
+      var dy = e.touches[0].clientY - touchState.lastY;
+      touchState.lastX = e.touches[0].clientX; touchState.lastY = e.touches[0].clientY;
+      camTarget.theta += dx * 0.005;
+      camTarget.phi = clamp(camTarget.phi - dy * 0.005, -1.35, 1.35);
+    } else if(touchState.mode === "pinch" && e.touches.length === 2){
+      var dx2 = e.touches[0].clientX - e.touches[1].clientX;
+      var dy2 = e.touches[0].clientY - e.touches[1].clientY;
+      var dist = Math.sqrt(dx2*dx2+dy2*dy2);
+      var mx = (e.touches[0].clientX + e.touches[1].clientX)/2;
+      var my = (e.touches[0].clientY + e.touches[1].clientY)/2;
+      camTarget.zoom = clamp(camTarget.zoom * (dist/touchState.lastDist), 0.35, 3.2);
+      camTarget.panX += (mx - touchState.lastX)*0.9;
+      camTarget.panY += (my - touchState.lastY)*0.9;
+      touchState.lastDist = dist; touchState.lastX = mx; touchState.lastY = my;
+      syncZoomSlider();
+    }
+  }, {passive:true});
+  stage.addEventListener("touchend", function(){ touchState.mode = null; });
+
+  document.getElementById("btn-cam-reset").addEventListener("click", function(){
+    camTarget.theta = CAM_DEFAULT.theta;
+    camTarget.phi = CAM_DEFAULT.phi;
+    camTarget.zoom = CAM_DEFAULT.zoom;
+    camTarget.panX = 0; camTarget.panY = 0;
+    syncZoomSlider();
+  });
+
+  function applyCameraTransform(){
+    var t = "translate3d(" + camState.panX + "px," + camState.panY + "px,0) " +
+            "rotateX(" + (camState.phi) + "rad) rotateY(" + (camState.theta) + "rad) " +
+            "scale(" + camState.zoom + ")";
+    cameraRig.style.transform = t;
+  }
+
+  /* =====================================================================
+     PHẦN 6 — TRẠNG THÁI MÔ PHỎNG: play/pause, tốc độ, thời gian
+     ===================================================================== */
+  var simTime = 0;        // đơn vị nội bộ (giây mô phỏng)
+  var speedMultiplier = 1;
+  var paused = false;
+
+  var btnPlay = document.getElementById("btn-play");
+  var btnReset = document.getElementById("btn-reset");
+  var speedSlider = document.getElementById("speed-slider");
+  var speedLabel = document.getElementById("speed-label");
+  var speedReadout = document.getElementById("speed-readout");
+  var timeReadout = document.getElementById("time-readout");
+  var simClock = document.getElementById("sim-clock");
+  var zoomSlider = document.getElementById("zoom-slider");
+  var zoomLabel = document.getElementById("zoom-label");
+
+  function sliderToSpeed(v){
+    // 0 -> 0x, 50 -> 1x, 200 -> 40x  (đường cong để vừa chỉnh tinh vừa tăng tốc nhanh)
+    var n = v / 50; // 0..4
+    return Math.pow(n, 2);
+  }
+  function updateSpeedFromSlider(){
+    speedMultiplier = sliderToSpeed(parseFloat(speedSlider.value));
+    var txt = speedMultiplier.toFixed(speedMultiplier < 10 ? 2 : 1) + "×";
+    speedLabel.textContent = txt;
+    speedReadout.textContent = txt;
+    document.body.classList.toggle("fast-motion", speedMultiplier > 8);
+  }
+  speedSlider.addEventListener("input", updateSpeedFromSlider);
+  updateSpeedFromSlider();
+
+  function syncZoomSlider(){
+    zoomSlider.value = Math.round(camTarget.zoom*100);
+    zoomLabel.textContent = Math.round(camTarget.zoom*100) + "%";
+  }
+  zoomSlider.addEventListener("input", function(){
+    camTarget.zoom = clamp(parseFloat(zoomSlider.value)/100, 0.3, 3.0);
+  });
+
+  btnPlay.addEventListener("click", function(){
+    paused = !paused;
+    btnPlay.textContent = paused ? "▶ Play" : "⏸ Pause";
+    btnPlay.classList.toggle("primary", !paused);
+  });
+
+  btnReset.addEventListener("click", function(){
+    simTime = 0;
+    speedSlider.value = 50;
+    updateSpeedFromSlider();
+    paused = false;
+    btnPlay.textContent = "⏸ Pause";
+    btnPlay.classList.add("primary");
+    camTarget.theta = CAM_DEFAULT.theta;
+    camTarget.phi = CAM_DEFAULT.phi;
+    camTarget.zoom = CAM_DEFAULT.zoom;
+    camTarget.panX = 0; camTarget.panY = 0;
+    syncZoomSlider();
+  });
+
+  function updateTimeDisplay(){
+    var days = simTime * 3.0; // hệ số quy đổi giây mô phỏng -> "ngày" hiển thị
+    var years = days/365;
+    var text = years >= 1 ? (years.toFixed(2) + " năm") : (days.toFixed(1) + " ngày");
+    timeReadout.textContent = text;
+    simClock.textContent = "Ngày " + days.toFixed(1);
+  }
+
+  /* =====================================================================
+     PHẦN 7 — CÁC CÔNG TẮC HIỂN THỊ (checkbox)
+     ===================================================================== */
+  document.getElementById("chk-orbits").addEventListener("change", function(e){
+    document.body.classList.toggle("hide-orbits", !e.target.checked);
+  });
+  document.getElementById("chk-labels").addEventListener("change", function(e){
+    document.body.classList.toggle("hide-labels", !e.target.checked);
+  });
+  document.getElementById("chk-stars").addEventListener("change", function(e){
+    starsEnabled = e.target.checked;
+    starCanvas.style.opacity = e.target.checked ? "1" : "0";
+  });
+  document.getElementById("chk-glow").addEventListener("change", function(e){
+    document.body.classList.toggle("no-glow", !e.target.checked);
+  });
+  document.getElementById("chk-effects").addEventListener("change", function(e){
+    document.body.classList.toggle("effects-off", !e.target.checked);
+  });
+
+  /* =====================================================================
+     PHẦN 8 — VÒNG LẶP HOẠT ẢNH CHÍNH (requestAnimationFrame, không dùng setInterval)
+     ===================================================================== */
+  var lastTime = performance.now();
+  var fpsAccum = 0, fpsFrames = 0, fpsTimer = 0;
+  var fpsValueEl = document.getElementById("fps-value");
+
+  function tick(now){
+    requestAnimationFrame(tick);
+    var dt = Math.min((now - lastTime)/1000, 0.1); // giới hạn dt để tránh nhảy khung khi tab ẩn
+    lastTime = now;
+
+    // --- FPS ---
+    fpsFrames++; fpsTimer += dt;
+    if(fpsTimer >= 0.5){
+      var fps = Math.round(fpsFrames/fpsTimer);
+      fpsValueEl.textContent = fps;
+      fpsValueEl.className = fps >= 50 ? "fps-good" : (fps >= 30 ? "fps-warn" : "");
+      fpsFrames = 0; fpsTimer = 0;
+    }
+
+    // --- Camera easing (chuyển động mượt) ---
+    var ease = 0.12;
+    camState.theta += (camTarget.theta - camState.theta) * ease;
+    camState.phi   += (camTarget.phi   - camState.phi)   * ease;
+    camState.zoom  += (camTarget.zoom  - camState.zoom)  * ease;
+    camState.panX  += (camTarget.panX  - camState.panX)  * ease;
+    camState.panY  += (camTarget.panY  - camState.panY)  * ease;
+    applyCameraTransform();
+
+    // --- Thời gian mô phỏng ---
+    if(!paused){ simTime += dt * speedMultiplier; }
+    updateTimeDisplay();
+
+    // --- Cập nhật quỹ đạo & tự quay của từng hành tinh ---
+    for(var i=0;i<planetRefs.length;i++){
+      var ref = planetRefs[i];
+      var orbitAngle = ref.angleOffset + simTime * ref.data.orbitSpeed;
+      ref.pivot.style.transform = "rotateY(" + orbitAngle + "rad)";
+      var spinAngle = (simTime * ref.data.spinSpeed * 40) % 360;
+      ref.el.style.setProperty("--spin", spinAngle + "deg");
+      ref.el.style.setProperty("--cloud-spin", (spinAngle*1.4) + "deg");
+
+      if(ref.moon){
+        var moonAngle = ref.moon.angleOffset + simTime * ref.moon.data.orbitSpeed;
+        ref.moon.pivot.style.transform = "rotateY(" + moonAngle + "rad)";
+        var moonSpin = (simTime * ref.moon.data.spinSpeed * 40) % 360;
+        ref.moon.el.style.setProperty("--spin", moonSpin + "deg");
+      }
+    }
+
+    // --- Vẽ lại nền: sao nhấp nháy, bụi trôi có parallax theo góc camera ---
+    drawStars(now);
+    if(!document.body.classList.contains("effects-off")){
+      drawDust(now, camState.theta*30, camState.phi*20);
+    }
+  }
+
+  /* =====================================================================
+     PHẦN 9 — KHỞI TẠO & SỰ KIỆN RESIZE
+     ===================================================================== */
+  function init(){
+    resizeCanvases();
+    buildStars();
+    buildDust();
+    syncZoomSlider();
+    applyCameraTransform();
+    requestAnimationFrame(tick);
+  }
+
+  var resizeTimer = null;
+  window.addEventListener("resize", function(){
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function(){
+      resizeCanvases();
+      buildStars();
+    }, 150);
+  });
+
+  init();
+})();
+</script>
+</body>
+</html>
